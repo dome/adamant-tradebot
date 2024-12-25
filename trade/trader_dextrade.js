@@ -15,83 +15,37 @@ module.exports = (
     pwd,
     log,
     publicOnly = false,
-    loadMarket = false,
+    loadMarket = true,
     useSocket = false,
     useSocketPull = false,
     accountNo = 0,
     coin1 = config.coin1,
     coin2 = config.coin2,
 ) => {
-  const coinstoreApiClient = DexTradeApi();
+  const dextradeApiClient = DexTradeApi();
 
-  coinstoreApiClient.setConfig(apiServer, apiKey, secretKey, pwd, log, publicOnly);
+
+  dextradeApiClient.setConfig(apiServer, apiKey, secretKey, pwd, log, publicOnly);
+
+  const ORDER_SIDE = {
+    0: 'buy', 1: 'sell'
+  }
+
+  const ORDER_SIDE2 = {
+    'buy': 0, sell: 1
+  }
+
+  const ORDER_TYPE = {
+    0: 'limit', 
+    1: 'market',
+    2: 'limit',
+    3: 'market',
+    4: 'limit',
+  }
 
   // Fulfill markets on initialization
   if (loadMarket) {
-    getCurrencies();
     getMarkets();
-  }
-
-  /**
-   * Get info on all currencies
-   * @param {String} coin
-   * @param {Boolean} forceUpdate Update currencies to refresh parameters
-   * @returns {Promise<unknown>|*}
-   */
-  function getCurrencies(coin, forceUpdate = false) {
-    if (module.exports.gettingCurrencies) return;
-    if (module.exports.exchangeCurrencies && !forceUpdate) return module.exports.exchangeCurrencies[coin];
-
-    module.exports.gettingCurrencies = true;
-
-    return new Promise((resolve) => {
-      coinstoreApiClient.currencies().then((currencies) => {
-        try {
-          const result = {};
-
-          for (const coin in currencies) {
-            // Returned data is not full and doesn't include decimals, precision, min amounts, etc
-            const currency = currencies[coin];
-
-            result[currency.name.toUpperCase()] = {
-              symbol: currency.name.toUpperCase(),
-              name: currency.name.toUpperCase(),
-              status: undefined,
-              comment: undefined,
-              confirmations: undefined,
-              withdrawalFee: undefined,
-              minWithdraw: +currency.min_withdraw,
-              maxWithdraw: +currency.max_withdraw,
-              logoUrl: undefined,
-              exchangeAddress: undefined,
-              decimals: undefined,
-              precision: undefined,
-              networks: undefined,
-              defaultNetwork: undefined,
-              withdrawEnabled: currency.can_withdraw === 'true',
-              depositEnabled: currency.can_deposit === 'true',
-              id: currency.unified_cryptoasset_id,
-            };
-          }
-
-          if (Object.keys(result).length > 0) {
-            module.exports.exchangeCurrencies = result;
-            log.log(`${forceUpdate ? 'Updated' : 'Received'} info about ${Object.keys(result).length} currencies on ${exchangeName} exchange.`);
-          }
-
-          module.exports.gettingCurrencies = false;
-          resolve(result);
-        } catch (error) {
-          log.warn(`Error while processing getCurrencies() request: ${error}`);
-          resolve(undefined);
-        }
-      }).catch((error) => {
-        log.warn(`API request getCurrencies() of ${utils.getModuleName(module.id)} module failed. ${error}`);
-        resolve(undefined);
-      }).finally(() => {
-        module.exports.gettingCurrencies = false;
-      });
-    });
   }
 
   /**
@@ -109,52 +63,41 @@ module.exports = (
     module.exports.gettingMarkets = true;
 
     return new Promise((resolve) => {
-      coinstoreApiClient.ticker().then((markets) => {
+      dextradeApiClient.symbols().then((markets) => {
         try {
           const result = {};
 
-          markets.forEach((market) => {
-            const maxCoin1Decimals = Math.max(
-                utils.getDecimalsFromNumber(market.bidSize),
-                utils.getDecimalsFromNumber(market.askSize),
-                utils.getDecimalsFromNumber(market.volume),
-            );
-            const maxCoin2Decimals = Math.max(
-                utils.getDecimalsFromNumber(market.close),
-                utils.getDecimalsFromNumber(market.open),
-                utils.getDecimalsFromNumber(market.high),
-                utils.getDecimalsFromNumber(market.low),
-                utils.getDecimalsFromNumber(market.bid),
-                utils.getDecimalsFromNumber(market.ask),
-            );
-            /**
-             * DexTrade doesn't provide pair coin names or readable pair name
-             * It uses symbols like 'BTCUSDT'
-             * Thus, it's impossible to extract coin names or readable pair name
-             */
-            result[market.symbol] = {
-              pairReadable: undefined,
-              pairPlain: market.symbol,
-              coin1: undefined,
-              coin2: undefined,
-              coin1Decimals: maxCoin1Decimals,
-              coin2Decimals: maxCoin2Decimals,
-              coin1Precision: utils.getPrecision(maxCoin1Decimals),
-              coin2Precision: utils.getPrecision(maxCoin2Decimals),
+          if(!markets.data){
+            log.warn(`API request getMarkets() of ${utils.getModuleName(module.id)} module failed... ${error}`);
+            resolve(undefined);
+          }
+
+          for (const market of markets.data) {
+            //const pairNames = formatPairName(market.symbol);
+
+            result[market.pair] = {
+              pairReadable: `${market.base}/${market.quote}`,
+              pairPlain: market.pair,
+              coin1: market.base,
+              coin2: market.quote,
+              coin1Decimals: +market.base_decimal,
+              coin2Decimals: +market.quote_decimal,
+              coin1Precision: utils.getPrecision(+market.base_decimal),
+              coin2Precision: utils.getPrecision(+market.quote_decimal),
               coin1MinAmount: null,
               coin1MaxAmount: null,
               coin2MinPrice: null,
               coin2MaxPrice: null,
               minTrade: null,
               status: null,
+              pairId: market.id,
             };
-          });
+          }
 
           if (Object.keys(result).length > 0) {
             module.exports.exchangeMarkets = result;
             log.log(`Received info about ${Object.keys(result).length} markets on ${exchangeName} exchange.`);
           }
-
           resolve(result);
         } catch (error) {
           log.warn(`Error while processing getMarkets(${paramString}) request: ${error}`);
@@ -171,22 +114,12 @@ module.exports = (
 
   return {
     getMarkets,
-    getCurrencies,
-
     /**
      * Getter for stored markets info
      * @return {Object}
      */
     get markets() {
       return module.exports.exchangeMarkets;
-    },
-
-    /**
-     * Getter for stored currencies info
-     * @return {Object}
-     */
-    get currencies() {
-      return module.exports.exchangeCurrencies;
     },
 
     /**
@@ -199,27 +132,18 @@ module.exports = (
     },
 
     /**
-     * Get info for a specific currency
-     * @param coin As BTC
-     * @returns {Promise<*>|*}
-     */
-    currencyInfo(coin) {
-      return getCurrencies(coin);
-    },
-
-    /**
      * Features available on DexTrade exchange
      * @returns {Object}
      */
     features() {
       return {
         getMarkets: true,
-        getCurrencies: true,
+        getCurrencies: false,
         placeMarketOrder: true,
         allowAmountForMarketBuy: false,
         getDepositAddress: false,
         createDepositAddressWithWebsiteOnly: true,
-        getTradingFees: true,
+        getTradingFees: false,
         getAccountTradeVolume: false,
         getFundHistory: false,
         getFundHistoryImplemented: false,
@@ -236,7 +160,7 @@ module.exports = (
       let balances;
 
       try {
-        balances = await coinstoreApiClient.getBalances();
+        balances = await dextradeApiClient.getBalances();
       } catch (error) {
         log.warn(`API request getBalances(${paramString}) of ${utils.getModuleName(module.id)} module failed. ${error}`);
         return undefined;
@@ -271,13 +195,17 @@ module.exports = (
      * @returns {Promise<Array|undefined>}
      */
     async getOpenOrders(pair) {
+
       const paramString = `pair: ${pair}`;
       const coinPair = formatPairName(pair);
+      
+
 
       let orders;
 
       try {
-        orders = await coinstoreApiClient.getOrders(coinPair.pairPlain);
+        orders = await dextradeApiClient.getOrders();
+
       } catch (error) {
         log.warn(`API request getOpenOrders(${paramString}) of ${utils.getModuleName(module.id)} module failed. ${error}`);
         return undefined;
@@ -286,33 +214,34 @@ module.exports = (
       try {
         const result = [];
 
-        orders.forEach((order) => {
-          let orderStatus;
+        orders.data.list.forEach((order) => {
+          if(coinPair.pairPlain == order.pair){
+            let orderStatus;
 
-          // https://dextrade-openapi.github.io/en/index.html#dictionary
-          if (['SUBMITTED', 'SUBMITTING'].includes(order.ordStatus)) {
-            orderStatus = 'new';
-          } else if (order.ordStatus === 'PARTIAL_FILLED') {
-            orderStatus = 'part_filled';
-          } else if (order.ordStatus === 'FILLED') {
-            orderStatus = 'filled';
-          } else if (['CANCELED', 'CANCELING', 'REJECTED', 'EXPIRED', 'STOPPED'].includes(order.ordStatus)) {
-            orderStatus = 'cancelled';
+            // https://dextrade-openapi.github.io/en/index.html#dictionary
+            if (order.volume_done == 0) {
+              orderStatus = 'new';
+            } else if (order.volume == order.volume_done) {
+              orderStatus = 'filled';
+            } else {
+              orderStatus = 'part_filled';
+            }  
+
+            result.push({
+              orderId: order.id.toString(),
+              symbol: coinPair.pairReadable,
+              symbolPlain: order.pair,
+              price: +order.rate, // limit price
+              side: ORDER_SIDE[order.type], // 'buy' or 'sell'
+              type: ORDER_TYPE[order.type_trade], // 'limit', 'market', 'post_only'
+              timestamp: +order.time_create,
+              amount: +order.volume,
+              amountExecuted: +order.volume_done, // quantity filled in base currency
+              amountLeft: +order.volume-order.volume_done, // quantity left in base currency
+              status: orderStatus,
+            });
           }
-
-          result.push({
-            orderId: order.ordId.toString(),
-            symbol: `${order.baseCurrency}/${order.quoteCurrency}`,
-            symbolPlain: order.symbol,
-            price: +order.ordPrice, // limit price
-            side: order.side.toLowerCase(), // 'buy' or 'sell'
-            type: order.ordType.toLowerCase(), // 'limit', 'market', 'post_only'
-            timestamp: +order.timestamp,
-            amount: +order.ordQty,
-            amountExecuted: +order.cumQty, // quantity filled in base currency
-            amountLeft: +order.leavesQty, // quantity left in base currency
-            status: orderStatus,
-          });
+          
         });
 
         return result;
@@ -332,56 +261,51 @@ module.exports = (
      */
     async getOrderDetails(orderId, pair) {
       const paramString = `orderId: ${orderId}, pair: ${pair}`;
+      const coinPair = formatPairName(pair);
 
       let order;
 
       try {
-        order = await coinstoreApiClient.getOrder(orderId);
+        order = await dextradeApiClient.getOrder(orderId);
       } catch (error) {
         log.warn(`API request getOrderDetails(${paramString}) of ${utils.getModuleName(module.id)} module failed. ${error}`);
         return undefined;
       }
 
       try {
-        if (!order.coinstoreErrorInfo) {
+        if (!order.dextradeErrorInfo) {
+          order = order.data;
           let orderStatus;
-
           // https://dextrade-openapi.github.io/en/index.html#dictionary
-          if (['SUBMITTED', 'SUBMITTING'].includes(order.ordStatus)) {
+          if (order.volume_done == 0) {
             orderStatus = 'new';
-          } else if (order.ordStatus === 'PARTIAL_FILLED') {
-            orderStatus = 'part_filled';
-          } else if (order.ordStatus === 'FILLED') {
+          } else if (order.volume == order.volume_done) {
             orderStatus = 'filled';
-          } else if (['CANCELED', 'CANCELING', 'REJECTED', 'EXPIRED', 'STOPPED'].includes(order.ordStatus)) {
-            orderStatus = 'cancelled';
           } else {
-            orderStatus = 'unknown';
-          }
+            orderStatus = 'part_filled';
+          } 
 
           const result = {
-            orderId: order.ordId?.toString(), // According to docs, an order can have status 'NOT_FOUND'
+            orderId: order.id.toString(), // According to docs, an order can have status 'NOT_FOUND'
             tradesCount: undefined, // DexTrade doesn't provide trades
-            price: +order.ordPrice, // limit price
-            side: order.side?.toLowerCase(), // 'buy' or 'sell'
-            type: order.ordType?.toLowerCase(), // 'limit', 'market', 'post_only'
-            amount: +order.ordQty, // In coin1
-            volume: +order.ordQty * +order.ordPrice,
-            pairPlain: order.symbol,
-            pairReadable: `${order.baseCurrency}/${order.quoteCurrency}`,
+            price: +order.rate, // limit price
+            side: ORDER_SIDE[order.type], // 'buy' or 'sell'
+            type: ORDER_TYPE[order.type_trade], // 'limit', 'market', 'post_only'
+            amount: +order.volume, // In coin1
+            volume: +order.price,
+            pairPlain: order.pair,
+            pairReadable: coinPair.pairReadable,
             totalFeeInCoin2: undefined, // DexTrade doesn't provide fee info
-            amountExecuted: +order.cumQty, // In coin1
-            volumeExecuted: +order.cumAmt, // In coin2
-            timestamp: +order.timestamp, // in milliseconds
-            // when order.orderUpdateTime = order.timestamp, they are in milliseconds
-            // else, order.orderUpdateTime is in seconds, need to multiply by 1000 to get milliseconds
-            updateTimestamp: +order.orderUpdateTime === +order.timestamp ? +order.orderUpdateTime : +order.orderUpdateTime * 1000,
+            amountExecuted: +order.volume_done, // In coin1
+            volumeExecuted: +order.price_done, // In coin2
+            timestamp: +order.time_create, // in milliseconds
+            updateTimestamp: +order.time_done,
             status: orderStatus,
           };
 
           return result;
         } else {
-          const errorMessage = order.coinstoreErrorInfo || 'No details.';
+          const errorMessage = order.dextradeErrorInfo || 'No details.';
           log.log(`Unable to get order ${orderId} details: ${JSON.stringify(errorMessage)}. Returning unknown order status.`);
 
           return {
@@ -413,8 +337,10 @@ module.exports = (
 
       const coinPair = formatPairName(pair);
 
-      const marketInfo = this.marketInfo(pair);
-
+      const markets = this.markets;
+      const marketInfo = markets[coinPair.pairPlain];
+      //const marketInfo = this.marketInfo(pair);
+      
       let message;
 
       if (!marketInfo) {
@@ -449,6 +375,9 @@ module.exports = (
             message,
           };
         }
+
+        coin1Amount = parseFloat(coin1Amount);
+
       }
 
       if (coin2Amount) {
@@ -471,36 +400,23 @@ module.exports = (
             message,
           };
         }
+
+        price = parseFloat(price);
       }
 
-      if (+coin1Amount < marketInfo.coin1MinAmount) {
-        message = `Unable to place an order on ${exchangeName} exchange. Order amount ${coin1Amount} ${marketInfo.coin1} is less minimum ${marketInfo.coin1MinAmount} ${marketInfo.coin1} on ${marketInfo.pairReadable} pair.`;
-        log.warn(message);
-        return {
-          message,
-        };
-      }
-
-      if (coin2Amount && +coin2Amount < marketInfo.coin2MinAmount) { // coin2Amount may be null or undefined
-        message = `Unable to place an order on ${exchangeName} exchange. Order volume ${coin2Amount} ${marketInfo.coin2} is less minimum ${marketInfo.coin2MinAmount} ${marketInfo.coin2} on ${pair} pair.`;
-        log.warn(message);
-        return {
-          message,
-        };
-      }
 
       let orderType;
       let output = '';
 
       if (limit) {
-        orderType = 'limit';
+        orderType = 0;
         if (coin2Amount) {
           output = `${side} ${coin1Amount} ${coinPair.coin1} for ${coin2Amount} ${coinPair.coin2} at ${price} ${coinPair.coin2}.`;
         } else {
           output = `${side} ${coin1Amount} ${coinPair.coin1} for ${coin2AmountCalculated} ${coinPair.coin2} at ${price} ${coinPair.coin2}.`;
         }
       } else {
-        orderType = 'market';
+        orderType = 1;
         if (coin2Amount) {
           output = `${side} ${coinPair.coin1} for ${coin2Amount} ${coinPair.coin2} at Market Price on ${pair} pair.`;
         } else {
@@ -515,10 +431,14 @@ module.exports = (
 
       try {
         // eslint-disable-next-line max-len
-        response = await coinstoreApiClient.addOrder(coinPair.pairPlain, coin1Amount, coin2Amount, price, side, orderType);
+        response = await dextradeApiClient.addOrder(orderType, ORDER_SIDE2[side], price, coin1Amount, coinPair.pairPlain);
 
-        errorMessage = response?.coinstoreErrorInfo;
-        orderId = response?.ordId;
+        
+        
+        //response = await dextradeApiClient.addOrder(coinPair.pairPlain, coin1Amount, coin2Amount, price, side, orderType);
+
+        errorMessage = response?.dextradeErrorInfo;
+        orderId = response?.data?.id;
       } catch (error) {
         message = `API request addOrder(${paramString}) of ${utils.getModuleName(module.id)} module failed. ${error}.`;
         log.warn(message);
@@ -558,23 +478,19 @@ module.exports = (
       let order;
 
       try {
-        order = await coinstoreApiClient.cancelOrder(orderId, coinPair.pairPlain);
+        order = await dextradeApiClient.cancelOrder(orderId, coinPair.pairPlain);
       } catch (error) {
         log.warn(`API request cancelOrder(${paramString}) of ${utils.getModuleName(module.id)} module failed. ${error}`);
         return undefined;
       }
 
       try {
-        if (order.state === 'CANCELED') {
-          if (order.clientOrderId) {
-            log.log(`Cancelling order ${orderId} on ${pair} pair…`);
-            return true;
-          } else {
-            log.log(`Order ${orderId} on ${pair} pair is already cancelled.`);
-            return false;
-          }
+        if (order.status) {
+          // Note: You can cancel already cancelled order
+          log.log(`Cancelling order ${orderId} on ${pair} pair…`);
+          return true;
         } else {
-          const errorMessage = order?.state ?? order?.coinstoreErrorInfo ?? 'No details';
+          const errorMessage = order?.dextradeErrorInfo ?? 'No details';
           log.log(`Unable to cancel order ${orderId} on ${pair} pair: ${errorMessage}.`);
           return false;
         }
@@ -584,11 +500,13 @@ module.exports = (
       }
     },
 
+    
     /**
      * Cancel all order on specific pair
      * @param pair In classic format as BTC/USDT
      * @returns {Promise<Boolean|undefined>}
      */
+    /*
     async cancelAllOrders(pair) {
       const paramString = `pair: ${pair}`;
       const coinPair = formatPairName(pair);
@@ -596,7 +514,7 @@ module.exports = (
       let orders;
 
       try {
-        orders = await coinstoreApiClient.cancelAllOrders(coinPair.pairPlain);
+        orders = await dextradeApiClient.cancelAllOrders(coinPair.pairPlain);
       } catch (error) {
         log.warn(`API request cancelAllOrders(${paramString}) of ${utils.getModuleName(module.id)} module failed. ${error}`);
         return undefined;
@@ -611,7 +529,7 @@ module.exports = (
           log.log(`Cancelled ${orders.canceling.length} orders on ${coinPair.pairReadable} pair…`);
           return true;
         } else {
-          const errorMessage = orders?.state ?? orders?.coinstoreErrorInfo ?? 'No details';
+          const errorMessage = orders?.state ?? orders?.dextradeErrorInfo ?? 'No details';
           log.log(`Unable to cancel orders on ${coinPair.pairReadable} pair: ${errorMessage}.`);
           return false;
         }
@@ -619,7 +537,7 @@ module.exports = (
         log.warn(`Error while processing cancelAllOrders(${paramString}) request result: ${JSON.stringify(orders)}. ${error}`);
         return undefined;
       }
-    },
+    },*/
 
     /**
      * Get info on trade pair
@@ -633,21 +551,31 @@ module.exports = (
       let ticker;
 
       try {
-        ticker = await coinstoreApiClient.ticker();
+        ticker = await dextradeApiClient.ticker(coinPair.pairPlain);
       } catch (error) {
         log.warn(`API request getRates(${paramString}) of ${utils.getModuleName(module.id)} module failed. ${error}`);
         return undefined;
       }
+      
+
+      let orderBookData;
+      try {
+        orderBookData = await dextradeApiClient.orderBook(coinPair.pairPlain);
+      } catch (err) {
+        log.warn(`API request getRates-orderBook(${paramString}) of ${utils.getModuleName(module.id)} module failed. ${err}`);
+        return undefined;
+      }
+
 
       try {
-        ticker = ticker.find((t) => t.symbol === coinPair.pairPlain);
 
+        ticker = ticker.data;
         return {
-          ask: +ticker.ask,
-          bid: +ticker.bid,
-          last: +ticker.close,
-          volume: +ticker.volume,
-          volumeInCoin2: +ticker.amount,
+          ask: +orderBookData.data.sell[0]?.rate,
+          bid: +orderBookData.data.buy[0]?.rate,
+          last: +ticker.last,
+          volume: +ticker.volume_24H,
+          volumeInCoin2: null,
           high: +ticker.high,
           low: +ticker.low,
         };
@@ -669,7 +597,7 @@ module.exports = (
       let book;
 
       try {
-        book = await coinstoreApiClient.orderBook(coinPair.pairPlain);
+        book = await dextradeApiClient.orderBook(coinPair.pairPlain);
       } catch (error) {
         log.warn(`API request getOrderBook(${paramString}) of ${utils.getModuleName(module.id)} module failed. ${error}`);
         return undefined;
@@ -683,26 +611,26 @@ module.exports = (
 
         book.data.sell.forEach((crypto) => {
           result.asks.push({
-            amount: +crypto[0],
-            price: +crypto[1],
-            count: 1,
+            amount: +crypto.volume,
+            price: +crypto.rate,
+            count: +crypto.count,
             type: 'ask-sell-right',
           });
         });
         result.asks.sort((sell, buy) => {
-          return parseFloat(sell.rate) - parseFloat(buy.rate);
+          return parseFloat(sell.price) - parseFloat(buy.price);
         });
 
         book.data.buy.forEach((crypto) => {
           result.bids.push({
-            amount: +crypto[0],
-            price: +crypto[1],
-            count: 1,
+            amount: +crypto.volume,
+            price: +crypto.rate,
+            count: crypto.count,
             type: 'bid-buy-left',
           });
         });
         result.bids.sort((sell, buy) => {
-          return parseFloat(sell.rate) - parseFloat(buy.rate);
+          return parseFloat(buy.price) - parseFloat(sell.price);
         });
 
         return result;
@@ -724,7 +652,7 @@ module.exports = (
       let trades;
 
       try {
-        trades = await coinstoreApiClient.getTradesHistory(coinPair.pairPlain);
+        trades = await dextradeApiClient.getTradesHistory(coinPair.pairPlain);
       } catch (error) {
         log.warn(`API request getTradesHistory(${paramString}) of ${utils.getModuleName(module.id)} module failed. ${error}`);
         return undefined;
@@ -732,15 +660,15 @@ module.exports = (
 
       try {
         const result = [];
-
-        trades.forEach((trade) => {
+        
+        trades.data.forEach((trade) => {
           result.push({
             coin1Amount: +trade.volume, // amount in coin1
-            price: +trade.price, // trade price
-            coin2Amount: +trade.volume * +trade.price, // quote in coin2
-            date: +trade.ts, // must be as utils.unixTimeStampMs(): 1641121688194 - 1 641 121 688 194
-            type: trade.takerSide?.toLowerCase(), // 'buy' or 'sell'
-            tradeId: trade.tradeId?.toString(),
+            price: +trade.rate, // trade price
+            coin2Amount: +trade.price, // quote in coin2
+            date: +trade.timestamp, // must be as utils.unixTimeStampMs(): 1641121688194 - 1 641 121 688 194
+            type: trade.type?.toLowerCase(), // 'buy' or 'sell'
+            tradeId: null,  // DexTrade doesn't provide tradeId
           });
         });
 
@@ -756,54 +684,6 @@ module.exports = (
       }
     },
 
-    /**
-     * Get trading fees for account
-     * @param coinOrPair e.g., 'ETH' or 'ETH/USDT'. If not set, get info for all trade pairs
-     * @return {Promise<Array|undefined>}
-     */
-    async getFees(coinOrPair) {
-      const paramString = `coinOrPair: ${coinOrPair}`;
-
-      let coinPair;
-      let coin;
-      if (coinOrPair?.includes('/')) {
-        coinPair = formatPairName(coinOrPair);
-      } else {
-        coin = coinOrPair?.toUpperCase();
-      }
-
-      let data;
-
-      try {
-        data = await coinstoreApiClient.currencies();
-      } catch (error) {
-        log.warn(`API request getFees(${paramString}) of ${utils.getModuleName(module.id)} module failed. ${error}`);
-        return undefined;
-      }
-
-      try {
-        let result = [];
-        for (const coin in data) {
-          const currency = data[coin];
-          result.push({
-            pair: coin,
-            makerRate: +currency.maker_fee,
-            takerRate: +currency.taker_fee,
-          });
-        }
-
-        if (coinPair) {
-          result = result.filter((pair) => pair.pair === coinPair.coin1);
-        } else if (coin) {
-          result = result.filter((pair) => pair.pair === coin);
-        }
-
-        return result;
-      } catch (error) {
-        log.warn(`Error while processing getFees(${paramString}) request result: ${JSON.stringify(data)}. ${error}`);
-        return undefined;
-      }
-    },
   };
 };
 

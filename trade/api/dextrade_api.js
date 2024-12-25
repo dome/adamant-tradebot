@@ -38,6 +38,7 @@ module.exports = function() {
    * @param {String} url
    */
   const handleResponse = (responseOrError, resolve, reject, queryString, url) => {
+
     const httpCode = responseOrError?.status ?? responseOrError?.response?.status;
     const httpMessage = responseOrError?.statusText ?? responseOrError?.response?.statusText;
 
@@ -46,7 +47,7 @@ module.exports = function() {
 
     const error = {
       code: data?.code ?? 'No error code',
-      msg: data?.msg ?? data?.message ?? 'No error message',
+      msg: data?.error ?? data?.message ?? 'No error message',
     };
 
     const reqParameters = queryString || '{ No parameters }';
@@ -55,11 +56,11 @@ module.exports = function() {
       if (success) {
         resolve(data.data);
       } else {
-        const coinstoreErrorInfo = `[${error.code}] ${trimAny(error.msg, ' .')}`;
-        const errorMessage = httpCode ? `${httpCode} ${httpMessage}, ${coinstoreErrorInfo}` : String(responseOrError);
+        const dextradeErrorInfo = `[${error.code}] ${trimAny(error.msg, ' .')}`;
+        const errorMessage = httpCode ? `${httpCode} ${httpMessage}, ${dextradeErrorInfo}` : String(responseOrError);
 
         if (typeof data === 'object') {
-          data.coinstoreErrorInfo = coinstoreErrorInfo;
+          data.dextradeErrorInfo = dextradeErrorInfo;
         }
 
         if (httpCode === 200) {
@@ -111,16 +112,16 @@ module.exports = function() {
    */
   function protectedRequest(type, path, data) {
     const url = `${WEB_BASE}${path}`;
-    const sortedData = sortObjectKeys(data);
-    const signPayload = findValues(sortedData);
-
 
     const timestamp = Date.now();
+    data.request_id = timestamp;
+    
+    const sortedData = sortObjectKeys(data);
+    
+    const signPayload = Object.values(sortedData).join('');
+    
+    const sign = getSignature(config.secret_key, signPayload);
 
-    console.log(signPayload);
-    const sign = getSignature(config.secret_key, timestamp, signPayload);
-    const bodyString = { ...data, request_id: timestamp };
-    console.log(sign);
     return new Promise((resolve, reject) => {
       const httpOptions = {
         url,
@@ -134,14 +135,14 @@ module.exports = function() {
       };
 
       if (type === 'post') {
-        httpOptions.data = bodyString;
+        httpOptions.data = data;
       } else {
         httpOptions.params = data;
       }
 
       axios(httpOptions)
-          .then((response) => handleResponse(response, resolve, reject, bodyString, url))
-          .catch((error) => handleResponse(error, resolve, reject, bodyString, url));
+          .then((response) => handleResponse(response, resolve, reject, data, url))
+          .catch((error) => handleResponse(error, resolve, reject, data, url));
     });
   }
 
@@ -179,9 +180,9 @@ module.exports = function() {
    * @param {String} payload Data to sign
    * @returns {String}
    */
-  function getSignature(secret, timestamp, payload) {
+  function getSignature(secret, payload) {
     const hash = crypto.createHash('sha256');
-    hash.update(payload + timestamp + secret);
+    hash.update(payload + secret);
     return hash.digest('hex');
   }
 
@@ -220,9 +221,8 @@ module.exports = function() {
      * @param {String} symbol In DexTrade format as BTCUSDT
      * @return {Promise<Array>}
      */
-    getOrders(symbol) {
+    getOrders() {
       const params = {
-        symbol,
       };
 
       return protectedRequest('post', '/private/orders', params);
@@ -235,11 +235,11 @@ module.exports = function() {
      * @returns {Promise<Array>}
      */
     async getOrder(orderId) {
-      const params = {
-        ordId: orderId,
+      const data = {
+        order_id: orderId,
       };
 
-      return protectedRequest('get', '/api/v2/trade/order/orderInfo', params);
+      return protectedRequest('post', '/private/get-order', data);
     },
 
     /**
@@ -253,22 +253,16 @@ module.exports = function() {
      * @param {String} type market or limit
      * @return {Promise<Object>}
      */
-    addOrder(symbol, amount, quote, price, side, type) {
+    addOrder(type_trade, type, rate, volume, pair) {
       const data = {
-        symbol,
-        side: side.toUpperCase(),
-        ordType: type.toUpperCase(),
-        ordPrice: +price,
-        timestamp: Date.now(),
+        pair,
+        rate,
+        type,
+        type_trade,
+        volume
       };
 
-      if (type === 'market' && side === 'buy') {
-        data.ordAmt = +quote;
-      } else if ((type === 'market' && side === 'sell') || type === 'limit') {
-        data.ordQty = +amount;
-      }
-
-      return protectedRequest('post', '/api/trade/order/place', data);
+      return protectedRequest('post', '/private/create-order', data);
     },
 
     /**
@@ -278,13 +272,12 @@ module.exports = function() {
      * @param {String} symbol In DexTrade format as BTCUSDT
      * @return {Promise<Object>}
      */
-    cancelOrder(orderId, symbol) {
+    cancelOrder(orderId) {
       const data = {
-        ordId: orderId,
-        symbol,
+        order_id: orderId,
       };
 
-      return protectedRequest('post', '/api/trade/order/cancel', data);
+      return protectedRequest('post', '/private/delete-order', data);
     },
 
     /**
@@ -316,7 +309,14 @@ module.exports = function() {
      * https://dextrade-openapi.github.io/en/index.html#ticker
      * @return {Promise<Array>}
     */
-    ticker() {
+    ticker(pair) {
+      const params = {
+        pair: pair
+      }
+      return publicRequest('get', '/public/ticker', params);
+    },
+
+    symbols() {
       return publicRequest('get', '/public/symbols', {});
     },
 
@@ -328,10 +328,10 @@ module.exports = function() {
      */
     orderBook(symbol) {
       const params = {
-        depth: 100, // The number of depths, such as "5, 10, 20, 50, 100", default 20
+        pair: symbol
       };
 
-      return publicRequest('get', `/public/book?pair=${symbol}`, params);
+      return publicRequest('get', `/public/book`, params);
     },
 
     /**
@@ -340,12 +340,12 @@ module.exports = function() {
      * @param {String} symbol In DexTrade format as BTCUSDT
      * @return {Promise<Array>}
      */
-    getTradesHistory(symbol) {
+    getTradesHistory(pair) {
       const params = {
-        size: 100, // Number of data bars, [1,100]
+        pair: pair
       };
 
-      return publicRequest('get', `/api/v1/market/trade/${symbol}`, params);
+      return publicRequest('get', `/public/trades`, params);
     },
 
   };

@@ -2745,7 +2745,6 @@ async function getBalancesInfo(accountNo = 0, tx, isWebApi = false, params, user
   try {
     let balances =
       await traderapi.getBalances();
-
     const accountTypeString = params?.[0] ? ` _${params?.[0]}_ account` : '';
     const caption = `${config.exchangeName}${accountTypeString} balances:\n`;
     const balancesObject = balancesString(balances, caption, params);
